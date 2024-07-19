@@ -1,0 +1,9 @@
+[package]
+name = "lds"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = {version="1.37", features = [ "net", "io-util", "macros", "rt-multi-thread", "time", "sync" ]}
+byteorder = "1.5"
+tokio-test = "0.4.0"
