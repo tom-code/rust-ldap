@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Result;
+use std::io::Write;
 
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
@@ -60,6 +61,23 @@ pub fn write_enum(buf: &mut Vec<u8>, val: u8) -> Result<()> {
 }
 fn write_octet_string(buf: &mut Vec<u8>, val: &[u8]) -> Result<()> {
     write_tag(buf, 0x4)?;
+    asn1_write_len(buf, val.len() as u8)?;
+    buf.extend_from_slice(val);
+    Ok(())
+}
+fn write_bool(buf: &mut Vec<u8>, val: bool) -> Result<()> {
+    write_tag(buf, 0x1)?;
+    asn1_write_len(buf, 1)?;
+    if val {
+        buf.write_u8(0xff)?;
+    } else {
+        buf.write_u8(0)?;
+    }
+    Ok(())
+}
+
+fn write_octet_string_with_tag(buf: &mut Vec<u8>, tag: u8, val: &[u8]) -> Result<()> {
+    write_tag(buf, tag)?;
     asn1_write_len(buf, val.len() as u8)?;
     buf.extend_from_slice(val);
     Ok(())
@@ -124,11 +142,17 @@ impl Encoder {
     pub fn write_octet_string(&mut self, val: &[u8]) -> Result<()> {
         write_octet_string(&mut self.buffer, val)
     }
+    pub fn write_octet_string_with_tag(&mut self, tag: u8, val: &[u8]) -> Result<()> {
+        write_octet_string_with_tag(&mut self.buffer, tag, val)
+    }
     pub fn write_enum(&mut self, val: u8) -> Result<()>{
         write_enum(&mut self.buffer, val)
     }
     pub fn write_int(&mut self, val: u32) -> Result<()> {
         write_int(&mut self.buffer, val)
+    }
+    pub fn write_bool(&mut self, val: bool) -> Result<()> {
+        write_bool(&mut self.buffer, val)
     }
 
     /*pub fn dump(&self) {

@@ -1,107 +1,86 @@
 
-use futures::StreamExt;
-use tokio::net::TcpListener;
-use std::{future::Future, io::Result, pin::Pin};
+use futures::{future::BoxFuture, StreamExt};
+use tokio::{net::TcpListener, sync::Mutex};
+use std::{future::Future, io::Result, pin::Pin, sync::Arc};
 
 mod asn1;
 mod codec;
+mod ldap;
 
 
 
-
-
-
-#[derive(Debug, Clone)]
-pub struct FilterAttributeValueAssertion {
-    pub name: String,
-    pub value: String
-}
-
-#[derive(Debug, Clone)]
-pub struct FilterPresent {
-    pub name: String
-}
-
-#[derive(Debug, Clone)]
-pub struct FilterAnd {
-    pub items: Vec<Filter>
-}
-
-#[derive(Debug, Clone)]
-pub enum Filter {
-    Empty(),
-    AttributeValueAssertion(FilterAttributeValueAssertion),
-    Present(FilterPresent),
-    And(FilterAnd)
-}
-
-
-#[derive(Debug, Clone)]
-pub struct MsgBind{
-    pub version: u32,
-    pub name: String,
-    pub password: String
-}
-
-#[derive(Debug, Clone)]
-pub struct MsgSearch {
-    pub base_object: String,
-    pub scope: u32,
-    pub deref: u32,
-    pub filter: Filter,
-    pub size_limit: u32,
-    pub time_limit: u32
-}
-
-#[derive(Debug, Clone)]
-pub struct MsgUnbind {
-}
-
-#[derive(Debug, Clone)]
-pub enum MsgE {
-    Bind(MsgBind),
-    Search(MsgSearch),
-    Unbind(MsgUnbind)
-}
-
-#[derive(Debug, Clone)]
-pub struct Message {
-    id: u32,
-    params: MsgE
-}
 
 pub trait Service {
-    type Future: Future<Output = Result<u32>>;
-    fn call(&mut self, req: Message) -> Self::Future;
+    type Future: Future<Output = Result<Vec<u8>>> + Send + Sync + 'static;
+    fn call(&self, req: ldap::Message) -> Self::Future;
 }
+
 
 struct Test1 {
 
 }
 
-impl Service for Test1 {
-    type Future = Pin<Box<dyn Future<Output = Result<u32>>>>;
+impl Service for Test1  {
+    type Future = Pin<Box<dyn Future<Output = Result<Vec<u8>>> +Send + Sync>>;
 
-    fn call(&mut self, req: Message) -> Self::Future {
-        let r = async {
-            println!("ret from service");
-            Ok(1)
+    fn call(&self, req: ldap::Message) -> Self::Future {
+        let id = req.id;
+        let r = async move {
+            //println!("ret from service");
+
+            match req.params {
+                ldap::MsgE::Bind(_)=> {
+                    let resp = codec::ldap_write_bind_response(id)?;
+                    Ok(resp)
+                },
+                ldap::MsgE::Unbind(_)=> {
+                    let resp = codec::ldap_write_bind_response(id)?;   // << wrong!
+                    Ok(resp)
+                },
+                ldap::MsgE::Search(_)=>{
+                    let mut resp1 = codec::ldap_write_search_res_entry(id)?;
+                    //Ok(resp)
+
+                    let mut resp2 = codec::ldap_write_search_res_done(id)?;
+                    resp1.append(&mut resp2);
+                    Ok(resp1)
+                },
+                _ => {Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown request"))}
+            }
+
+            //Ok("aaa".as_bytes().to_owned())
         };
         Box::pin(r)
     }
 }
 
 
-struct LdapServer {
 
+//pub type BoxFuture2<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
+pub type BoxFuture2<T> = Pin<Box<dyn Future<Output = T> + Send + Sync>>;
+
+struct LdapServer {
+    //tasks :futures::stream::FuturesUnordered<BoxFuture2<Result<Vec<u8>>>>
+    //tasks :futures::stream::FuturesUnordered<T>
 }
 
 
 
 impl LdapServer {
-    async fn ldap_reader<R: tokio::io::AsyncReadExt+Unpin, W: tokio::io::AsyncWriteExt+Unpin>(self: &std::sync::Arc<Self>, socket : &mut R, writer: &mut W) -> Result<()> {
+    async fn ldap_reader<R: tokio::io::AsyncReadExt+Unpin, W: tokio::io::AsyncWriteExt+Unpin+Send + 'static>
+    (self: &std::sync::Arc<Self>, socket : &mut R, mut writer: W, s: Arc<impl Service + std::marker::Send + std::marker::Sync + 'static>
+        ) -> Result<()> {
         let mut buffer: [u8; 1000] = [0; 1000];
         let mut have = 0;
+
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1024);
+        tokio::spawn(async move {
+            //loop {
+                while let Some(i) = writer_rx.recv().await {
+                    tokio::io::AsyncWriteExt::write_all(&mut writer, i.as_ref()).await.unwrap();
+                }
+            //}
+        });
         loop {
             let res = tokio::io::AsyncReadExt::read(socket, &mut buffer[have..]).await?;
             if res == 0 {
@@ -112,7 +91,7 @@ impl LdapServer {
                 let (parsed, parsed_size) = match codec::parse_message(&buffer[..have]) {
                     Ok(r) => r,
                     Err(e) => {
-                        println!("err {:?}", e);
+                        println!("errx {:?}", e);
                         if e.kind() == std::io::ErrorKind::WouldBlock {
                             break
                         } else {
@@ -120,8 +99,24 @@ impl LdapServer {
                         }
                     }
                 };
+                {
+                    //let l = s.lock().await;
+                    //let resp = s.call(parsed).await.unwrap();
+                    //tokio::io::AsyncWriteExt::write_all(writer, resp.as_ref()).await?;
+                    //let f = s.call(parsed);
+                    //tasks.push(Box::pin(f));
+                }
+                let f = s.call(parsed);
+                let wtx = writer_tx.clone();
+                tokio::spawn(async move {
+                    let resp = f.await.unwrap();
+                    wtx.send(resp).await.unwrap();
+                    //tokio::io::AsyncWriteExt::write_all(writer, resp.as_ref()).await.unwrap();
+                });
+                
+                //tokio::io::AsyncWriteExt::write_all(writer, resp.as_ref()).await?;
                 //println!("{:?}", parsed);
-                match parsed.params {
+                /*match parsed.params {
                     MsgE::Bind(_)=> {
                         let resp = codec::ldap_write_bind_response(parsed.id)?;
                         tokio::io::AsyncWriteExt::write_all(writer, resp.as_ref()).await?;
@@ -134,7 +129,7 @@ impl LdapServer {
                         tokio::io::AsyncWriteExt::write_all(writer, resp.as_ref()).await?;
                     },
                     _ => {}
-                };
+                };*/
 
                 if parsed_size != have {
                     buffer.copy_within(parsed_size..have, 0);
@@ -144,25 +139,29 @@ impl LdapServer {
         }
     }
 
-    async fn start_server(self: &std::sync::Arc<Self>) -> Result<()> {
+    //async fn start_server(self: &std::sync::Arc<Self>, svc: Arc<impl Service + std::marker::Send + std::marker::Sync + 'static>) -> Result<()> {
+        async fn start_server<S: Service + std::marker::Send + std::marker::Sync + 'static>(self: &std::sync::Arc<Self>, svc: Arc<S>) -> Result<()> where
+        <S as Service>::Future: std::marker::Sync,
+        <S as Service>::Future: std::marker::Send {
         println!("ldap will listen on 0.0.0.0:389");
         let listener = TcpListener::bind("0.0.0.0:389").await?;
         loop {
             let (socket, remote_addr) = listener.accept().await?;
             let s = self.clone();
+            let svc1 = svc.clone();
             tokio::spawn(async move {
                 println!("incoming connection from: {:?}", remote_addr);
-                let (mut r, mut w) = socket.into_split();
-                let res = s.ldap_reader(&mut r, &mut w).await;
+                let (mut r, w) = socket.into_split();
+                let res = s.ldap_reader(&mut r, w, svc1).await;
                 println!("reader done {:?}", res);
             });
         }
     }
 
-    async fn start2(self: &std::sync::Arc<Self>, mut s: impl Service) {
+    async fn start2(self: &std::sync::Arc<Self>, s: impl Service) {
         let mut tasks = futures::stream::FuturesUnordered::new();
-        let t2 = s.call(Message { id: 1, params: MsgE::Unbind(MsgUnbind{ })});
-        let t1 = s.call(Message { id: 1, params: MsgE::Unbind(MsgUnbind{ })});
+        let t2 = s.call(ldap::Message { id: 1, params: ldap::MsgE::Unbind(ldap::MsgUnbind{ })});
+        let t1 = s.call(ldap::Message { id: 1, params: ldap::MsgE::Unbind(ldap::MsgUnbind{ })});
         tasks.push(t1);
         tasks.push(t2);
         while let Some(result) = tasks.next().await {
@@ -176,37 +175,12 @@ impl LdapServer {
 fn main() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let ldap = std::sync::Arc::new(LdapServer{});
+        let ldap = std::sync::Arc::new(LdapServer{ /*tasks: futures::stream::FuturesUnordered::new()*/ });
         //ldap.start2(Test1{}).await;
-        let res = ldap.start_server().await;
+        let res = ldap.start_server(Arc::new(Test1{})).await;
         if let Err(e) = res {
             println!("{:?}", e)
         }
     });
 }
 
-/*
-#[tokio::test]
-async fn reader_test() {
-    let unbind: &[u8] = &[0x30, 0x05, 0x02, 0x01, 0x03, 0x42, 0x00];
-    let mut reader = tokio_test::io::Builder::new()
-        .read(unbind)
-        .build();
-    let mut writer = tokio_test::io::Builder::new()
-        //.write(b"Thanks for your message.\r\n")
-        .build();
-    let _ = ldap_reader(&mut reader, &mut writer).await;
-
-
-    let unbind1: &[u8] = &[0x30, 0x05];
-    let unbind2: &[u8] = &[0x02, 0x01, 0x03, 0x42, 0x00];
-    let mut reader = tokio_test::io::Builder::new()
-        .read(unbind1)
-        .read(unbind2)
-        .build();
-    let mut writer = tokio_test::io::Builder::new()
-        //.write(b"Thanks for your message.\r\n")
-        .build();
-    let _ = ldap_reader(&mut reader, &mut writer).await;
-}
-*/

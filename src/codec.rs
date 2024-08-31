@@ -3,15 +3,15 @@ use std::io::Read;
 use std::io::Result;
 
 use crate::asn1;
-use crate::Filter;
-use crate::FilterAnd;
-use crate::FilterAttributeValueAssertion;
-use crate::FilterPresent;
-use crate::Message;
-use crate::MsgBind;
-use crate::MsgE;
-use crate::MsgSearch;
-use crate::MsgUnbind;
+use crate::ldap::Filter;
+use crate::ldap::FilterAnd;
+use crate::ldap::FilterAttributeValueAssertion;
+use crate::ldap::FilterPresent;
+use crate::ldap::Message;
+use crate::ldap::MsgBind;
+use crate::ldap::MsgE;
+use crate::ldap::MsgSearch;
+use crate::ldap::MsgUnbind;
 
 
 
@@ -71,6 +71,40 @@ pub fn ldap_read_filter(cursor: &mut Cursor<&[u8]>) -> Result<Filter> {
     }
 }
 
+pub fn ldap_write_bind_request(id: u32) -> Result<Vec<u8>> {
+    let mut e = asn1::Encoder::new();
+    e.start_seq(0x30)?;
+    e.write_int(id)?;
+    e.start_seq(0x60)?;
+    e.write_int(3)?; //version
+    e.write_octet_string("name".as_bytes())?;
+    e.write_octet_string_with_tag(0x80, "passwd".as_bytes())?;
+    Ok(e.encode())
+}
+
+
+pub fn ldap_write_search_request(id: u32) -> Result<Vec<u8>> {
+    let mut e = asn1::Encoder::new();
+    e.start_seq(0x30)?;
+    e.write_int(id)?;
+    e.start_seq(0x63)?;
+    e.write_octet_string("base".as_bytes())?;
+    e.write_enum(1)?;
+    e.write_enum(0)?;
+    e.write_int(0)?;
+    e.write_int(0)?;
+    e.write_bool(false)?;
+
+    e.start_seq(0xa3)?;
+    e.write_octet_string("a".as_bytes())?;
+    e.write_octet_string("b".as_bytes())?;
+    e.end_seq();
+
+    //e.write_octet_string("name".as_bytes())?;
+    //e.write_octet_string_with_tag(0x80, "passwd".as_bytes())?;
+    Ok(e.encode())
+}
+
 pub fn ldap_write_bind_response(id: u32) -> Result<Vec<u8>> {
     let mut e = asn1::Encoder::new();
     e.start_seq(0x30)?;
@@ -125,6 +159,9 @@ pub fn ldap_write_search_res_entry(id: u32) -> Result<Vec<u8>> {
 
 pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
     //println!("parsing {:?}", hex::encode(data));
+    if data.len() < 5 {
+        return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+    }
     let mut cursor = std::io::Cursor::new(data);
     let _start_seq_tag = asn1::read_tag(&mut cursor)?;
     let start_seq_len = asn1::read_size(&mut cursor)? as usize;
@@ -176,7 +213,10 @@ pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
                 }),
             }, start_seq_len + 2))
         }
-        _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+        r => {
+            println!("unknown req {:?}", r);
+            Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+        }
     }
 }
 
