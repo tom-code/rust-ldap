@@ -31,12 +31,12 @@ impl Service for Test1  {
 
             match req.params {
                 ldap::MsgE::Bind(_)=> {
-                    let resp = codec::ldap_write_bind_response(id)?;
+                    let resp = codec::ldap_write_bind_response(id, 0)?;
                     Ok(resp)
                 },
                 ldap::MsgE::Unbind(_)=> {
-                    let resp = codec::ldap_write_bind_response(id)?;   // << wrong!
-                    Ok(resp)
+                    //let resp = codec::ldap_write_bind_response(id, 0)?;   // << wrong!
+                    Ok(vec![])
                 },
                 ldap::MsgE::Search(_)=>{
                     let mut resp1 = codec::ldap_write_search_res_entry(id,
@@ -109,6 +109,7 @@ impl LdapServer {
                         }
                     }
                 };
+                println!("{:?}", parsed);
                 {
                     //let l = s.lock().await;
                     //let resp = s.call(parsed).await.unwrap();
@@ -120,7 +121,9 @@ impl LdapServer {
                 let wtx = writer_tx.clone();
                 tokio::spawn(async move {
                     let resp = f.await.unwrap();
-                    wtx.send(resp).await.unwrap();
+                    if !resp.is_empty() {
+                        wtx.send(resp).await.unwrap();
+                    }
                     //tokio::io::AsyncWriteExt::write_all(writer, resp.as_ref()).await.unwrap();
                 });
                 

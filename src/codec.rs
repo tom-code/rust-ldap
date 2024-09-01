@@ -3,8 +3,6 @@ use std::io::Read;
 use std::io::Result;
 
 use crate::asn1;
-use crate::asn1::read_string;
-use crate::asn1::Encoder;
 use crate::ldap::Filter;
 use crate::ldap::FilterAnd;
 use crate::ldap::FilterAttributeValueAssertion;
@@ -87,7 +85,7 @@ pub fn ldap_write_bind_request(id: u32, name: &str, password: &str) -> Result<Ve
     Ok(e.encode())
 }
 
-fn enc_filter(e: &mut Encoder, f: &Filter) -> Result<()> {
+fn enc_filter(e: &mut asn1::Encoder, f: &Filter) -> Result<()> {
     match f {
         Filter::Empty() => Ok(()),
         Filter::EqualityMatch(f) => {
@@ -127,12 +125,12 @@ pub fn ldap_write_search_request(id: u32, msg: &MsgSearch) -> Result<Vec<u8>> {
     Ok(e.encode())
 }
 
-pub fn ldap_write_bind_response(id: u32) -> Result<Vec<u8>> {
+pub fn ldap_write_bind_response(id: u32, res: u32) -> Result<Vec<u8>> {
     let mut e = asn1::Encoder::new();
     e.start_seq(0x30)?;
     e.write_int(id)?;
     e.start_seq(0x61)?;
-    e.write_enum(0)?;
+    e.write_enum(res as u8)?;
     e.write_octet_string(&[])?;
     e.write_octet_string(&[])?;
     Ok(e.encode())
