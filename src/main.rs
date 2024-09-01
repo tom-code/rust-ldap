@@ -1,6 +1,7 @@
 
-use futures::{future::BoxFuture, StreamExt};
-use tokio::{net::TcpListener, sync::Mutex};
+use futures::StreamExt;
+use ldap::PartialAttribute;
+use tokio::net::TcpListener;
 use std::{future::Future, io::Result, pin::Pin, sync::Arc};
 
 mod asn1;
@@ -38,10 +39,19 @@ impl Service for Test1  {
                     Ok(resp)
                 },
                 ldap::MsgE::Search(_)=>{
-                    let mut resp1 = codec::ldap_write_search_res_entry(id)?;
+                    let mut resp1 = codec::ldap_write_search_res_entry(id,
+                        "n1",
+                        &vec![
+                            PartialAttribute {
+                                name: "a1".to_owned(),
+                                values: vec!["aaa".to_owned(), "bbbb".to_owned()] },
+                            PartialAttribute {
+                                name: "a2".to_owned(),
+                                values: vec!["aaa2".to_owned(), "bbbb2".to_owned()] }
+                        ])?;
                     //Ok(resp)
 
-                    let mut resp2 = codec::ldap_write_search_res_done(id)?;
+                    let mut resp2 = codec::ldap_write_search_res_done(id, 1)?;
                     resp1.append(&mut resp2);
                     Ok(resp1)
                 },

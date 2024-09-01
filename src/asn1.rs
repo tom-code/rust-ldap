@@ -1,7 +1,6 @@
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Result;
-use std::io::Write;
 
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
@@ -168,6 +167,12 @@ impl Encoder {
     }
 }
 
+impl Default for Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 #[test]
 fn a_test() {
@@ -184,5 +189,9 @@ fn a_test() {
     let mut buf = Vec::new();
     write_int(&mut buf, 256).unwrap();
     assert_eq!(buf, vec![0x02, 0x02, 0x1, 0x0]);
+
+    let mut buf = Vec::new();
+    write_bool(&mut buf, true).unwrap();
+    assert_eq!(buf, vec![0x01, 0x01, 0xff]);
 }
 

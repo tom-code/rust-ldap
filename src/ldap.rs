@@ -20,7 +20,7 @@ pub struct FilterAnd {
 #[derive(Debug, Clone)]
 pub enum Filter {
     Empty(),
-    AttributeValueAssertion(FilterAttributeValueAssertion),
+    EqualityMatch(FilterAttributeValueAssertion),
     Present(FilterPresent),
     And(FilterAnd)
 }
@@ -34,6 +34,13 @@ pub struct MsgBind{
 }
 
 #[derive(Debug, Clone)]
+pub struct MsgBindResponse {
+    pub res: u32,
+    pub matched_dn: String,
+    pub diag: String
+}
+
+#[derive(Debug, Clone)]
 pub struct MsgSearch {
     pub base_object: String,
     pub scope: u32,
@@ -43,6 +50,25 @@ pub struct MsgSearch {
     pub time_limit: u32
 }
 
+
+#[derive(Debug, Clone)]
+pub struct PartialAttribute {
+    pub name: String,
+    pub values: Vec<String>
+}
+
+#[derive(Debug, Clone)]
+pub struct MsgSearchResult {
+    pub name: String,
+    pub values: Vec<PartialAttribute>
+}
+
+#[derive(Debug, Clone)]
+pub struct MsgSearchResultDone {
+    pub res: u32
+}
+
+
 #[derive(Debug, Clone)]
 pub struct MsgUnbind {
 }
@@ -50,8 +76,11 @@ pub struct MsgUnbind {
 #[derive(Debug, Clone)]
 pub enum MsgE {
     Bind(MsgBind),
+    BindResponse(MsgBindResponse),
     Search(MsgSearch),
-    Unbind(MsgUnbind)
+    SearchResult(MsgSearchResult),
+    MsgSearchResultDone(MsgSearchResultDone),
+    Unbind(MsgUnbind),
 }
 
 #[derive(Debug, Clone)]
