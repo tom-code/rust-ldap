@@ -7,6 +7,7 @@ use std::{future::Future, io::Result, pin::Pin, sync::Arc};
 mod asn1;
 mod codec;
 mod ldap;
+mod tokiou;
 
 
 
@@ -82,6 +83,7 @@ impl LdapServer {
         ) -> Result<()> {
         let mut buffer: [u8; 1000] = [0; 1000];
         let mut have = 0;
+        //let dec = tokiou::DecodeContext::new()
 
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1024);
         tokio::spawn(async move {

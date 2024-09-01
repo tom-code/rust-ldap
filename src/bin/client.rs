@@ -1,15 +1,15 @@
-use lds::ldap::{self, Message, MsgBind, MsgE};
+use lds::ldap::{self, Message, MsgBind, MsgE, MsgSearch};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::oneshot};
 use std::{collections::HashMap, io::Result, time::Duration};
 
 
-
-struct DecContext {
+/*
+struct DecodeContext {
     buffer: [u8; 1000],
     have: usize
 }
 
-impl DecContext {
+impl DecodeContext {
     async fn get_message<R: tokio::io::AsyncRead + Unpin>(&mut self, s: &mut R) -> Result<Message> {
         loop {
             let (parsed, parsed_size) = match lds::codec::parse_message(&self.buffer[..self.have]) {
@@ -37,15 +37,17 @@ impl DecContext {
     fn new() -> Self {
         Self{ buffer: [0; 1000], have: 0 }
     }
-}
+}*/
 struct Client {
 
 }
 
 
 struct Context {
-    notif: tokio::sync::oneshot::Sender<lds::ldap::Message>
+    messages: Vec<Message>,
+    notif: tokio::sync::oneshot::Sender<Vec<lds::ldap::Message>>
 }
+
 struct Contexts {
     contexts: std::sync::Mutex<HashMap<u32, Context>>,
 }
@@ -68,6 +70,24 @@ impl Contexts {
         let mut l = self.contexts.lock().unwrap();
         l.remove(&id)
     }
+    fn update(&self, m: Message) -> Option<(Vec<Message>, tokio::sync::oneshot::Sender<Vec<lds::ldap::Message>>)> {
+        let id = m.id;
+        let last_fragment = !matches!(m.params, MsgE::SearchResult(_));
+        let mut l = self.contexts.lock().unwrap();
+        let c = l.get_mut(&id);
+        match c {
+            Some(c) => {
+                c.messages.push(m);
+                if last_fragment {
+                    let m = l.remove(&id).unwrap();
+                    Some((m.messages, m.notif))
+                } else {
+                    None
+                }
+            },
+            None => None,
+        }
+    }
 }
 
 struct ClientConnection {
@@ -82,7 +102,9 @@ impl ClientConnection {
                 lds::codec::ldap_write_bind_request(msg.id, &b.name, &b.password)
             },
             ldap::MsgE::BindResponse(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
-            ldap::MsgE::Search(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
+            ldap::MsgE::Search(s) => {
+                lds::codec::ldap_write_search_request(msg.id, &s)
+            },
             ldap::MsgE::SearchResult(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
             ldap::MsgE::MsgSearchResultDone(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
             ldap::MsgE::Unbind(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
@@ -94,28 +116,31 @@ impl ClientConnection {
         }
     }
 
-    async fn send_request_w(&self, msg: ldap::Message) -> Result<Message> {
+    async fn send_request_w(&self, msg: ldap::Message) -> Result<Vec<Message>> {
         let (tx, rx) = oneshot::channel();
         let id = msg.id;
-        self.contexts.add(id, Context { notif: tx });
+        self.contexts.add(id, Context { notif: tx, messages: Vec::new() });
         let res = self.send_request(msg).await;
         if let Err(e) = res {
             self.contexts.remove(id);
             return Err(e)
         };
+    
         let rec = rx.await;
         let recdata = match rec {
             Ok(m) => m,
             Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, e))
         };
 
+
         Ok(recdata)
     }
+
 }
 impl Client {
-    async fn start(&self) -> Result<ClientConnection> {
+    async fn connect(&self) -> Result<ClientConnection> {
         let (transmit_tx, mut transmit_rx) = tokio::sync::mpsc::channel(1024);
-        let mut stream = TcpStream::connect("127.0.0.1:389").await?;
+        let stream = TcpStream::connect("127.0.0.1:389").await?;
         let (mut reader, mut writer) = stream.into_split();
 
         let writer_task = tokio::spawn(async move {
@@ -133,16 +158,16 @@ impl Client {
         let contexts = std::sync::Arc::new(Contexts::new());
         let contextsc = contexts.clone();
         let reader_task = tokio::spawn(async move {
-            let mut dc = DecContext::new();
+            let mut dc = lds::tokiou::DecodeContext::new();
             loop {
                 let msg = dc.get_message(&mut reader).await.unwrap();
                 println!("{:?}", msg);
-                let ctx = contextsc.get(msg.id);
-                match ctx {
-                    Some(m) => {
-                        m.notif.send(msg).unwrap();
+                let out = contextsc.update(msg);
+                match out {
+                    Some((m, s)) => {
+                        s.send(m).unwrap();
                     },
-                    None => println!("unexpected trx {:?}", msg.id),
+                    None => continue,
                 }
             }
         });
@@ -155,7 +180,7 @@ async fn client() -> Result<()> {
     let (mut reader, mut writer) = stream.split();
     let rq = lds::codec::ldap_write_bind_request(0, "name", "pwd")?;
     writer.write_all(rq.as_ref()).await.unwrap();
-    let mut dc = DecContext::new();
+    let mut dc = lds::tokiou::DecodeContext::new();
     let parsed = dc.get_message(&mut reader).await;
     println!("{:?}", parsed);
 
@@ -186,7 +211,7 @@ async fn client() -> Result<()> {
 
 async fn client2() -> Result<()> {
     let c = Client{};
-    let connection = c.start().await?;
+    let connection = c.connect().await?;
     let res = connection.send_request_w(
     Message{
            id: 0,
@@ -194,6 +219,18 @@ async fn client2() -> Result<()> {
         },
     ).await?;
     println!("response: {:?}", res);
+    let res2 = connection.send_request_w(Message{
+        id: 1,
+        params: MsgE::Search(
+            MsgSearch {
+                base_object: "b1".to_owned(),
+                scope: 0,
+                deref: 0,
+                filter: lds::ldap::Filter::Present(lds::ldap::FilterPresent { name: "pp".to_owned() }),
+                size_limit: 0,
+                time_limit: 0 }),
+    }).await;
+    println!("response2: {:?}", res2);
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     Ok(())
