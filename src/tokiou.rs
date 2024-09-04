@@ -3,8 +3,10 @@ use std::io::Result;
 use crate::ldap::Message;
 
 
+const MAX_SIZE: usize = 1024*32;
+
 pub struct DecodeContext {
-    buffer: [u8; 1000],
+    buffer: [u8; MAX_SIZE],
     have: usize
 }
 
@@ -34,7 +36,7 @@ impl DecodeContext {
         }
     }
     pub fn new() -> Self {
-        Self{ buffer: [0; 1000], have: 0 }
+        Self{ buffer: [0; MAX_SIZE], have: 0 }
     }
 }
 
