@@ -1,14 +1,13 @@
-use crate::ldap::{Message, MessageParams, self};
 use crate::codec;
+use crate::ldap::{self, Message, MessageParams, MsgBind, MsgBindResponse};
 use crate::tokiou;
-use tokio::{io::AsyncWriteExt, net::TcpStream, sync::oneshot};
+use std::sync::atomic::AtomicU32;
 use std::{collections::HashMap, io::Result};
-
-
+use tokio::{io::AsyncWriteExt, net::TcpStream, sync::oneshot};
 
 struct Context {
     messages: Vec<Message>,
-    notif: tokio::sync::oneshot::Sender<Vec<crate::ldap::Message>>
+    notif: tokio::sync::oneshot::Sender<Vec<crate::ldap::Message>>,
 }
 
 struct Contexts {
@@ -18,14 +17,14 @@ struct Contexts {
 impl Contexts {
     fn new() -> Self {
         Self {
-            contexts: std::sync::Mutex::new(HashMap::new())
+            contexts: std::sync::Mutex::new(HashMap::new()),
         }
     }
-    fn add(&self, id:u32, c: Context) {
+    fn add(&self, id: u32, c: Context) {
         let mut l = self.contexts.lock().unwrap();
         l.insert(id, c);
     }
-    fn remove(&self, id:u32) {
+    fn remove(&self, id: u32) {
         let mut l = self.contexts.lock().unwrap();
         l.remove(&id);
     }
@@ -33,7 +32,13 @@ impl Contexts {
         let mut l = self.contexts.lock().unwrap();
         l.remove(&id)
     }*/
-    fn update(&self, m: Message) -> Option<(Vec<Message>, tokio::sync::oneshot::Sender<Vec<ldap::Message>>)> {
+    fn update(
+        &self,
+        m: Message,
+    ) -> Option<(
+        Vec<Message>,
+        tokio::sync::oneshot::Sender<Vec<ldap::Message>>,
+    )> {
         let id = m.id;
         let last_fragment = !matches!(m.params, MessageParams::SearchResult(_));
         let mut l = self.contexts.lock().unwrap();
@@ -47,7 +52,7 @@ impl Contexts {
                 } else {
                     None
                 }
-            },
+            }
             None => None,
         }
     }
@@ -56,20 +61,39 @@ impl Contexts {
 pub struct ClientConnection {
     req_writer: tokio::sync::mpsc::Sender<Vec<u8>>,
     contexts: std::sync::Arc<Contexts>,
+    last_id: AtomicU32,
 }
 impl ClientConnection {
     async fn send_request(&self, msg: ldap::Message) -> Result<()> {
         let tosend = match msg.params {
             ldap::MessageParams::Bind(b) => {
                 codec::ldap_write_bind_request(msg.id, &b.name, &b.password)
-            },
-            ldap::MessageParams::BindResponse(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
-            ldap::MessageParams::Search(s) => {
-                codec::ldap_write_search_request(msg.id, &s)
-            },
-            ldap::MessageParams::SearchResult(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
-            ldap::MessageParams::MsgSearchResultDone(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
-            ldap::MessageParams::Unbind(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown msg")),
+            }
+            ldap::MessageParams::BindResponse(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unknown msg",
+                ))
+            }
+            ldap::MessageParams::Search(s) => codec::ldap_write_search_request(msg.id, &s),
+            ldap::MessageParams::SearchResult(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unknown msg",
+                ))
+            }
+            ldap::MessageParams::MsgSearchResultDone(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unknown msg",
+                ))
+            }
+            ldap::MessageParams::Unbind(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unknown msg",
+                ))
+            }
         }?;
         let res = self.req_writer.send(tosend).await;
         match res {
@@ -81,23 +105,50 @@ impl ClientConnection {
     pub async fn send_request_w(&self, msg: ldap::Message) -> Result<Vec<Message>> {
         let (tx, rx) = oneshot::channel();
         let id = msg.id;
-        self.contexts.add(id, Context { notif: tx, messages: Vec::new() });
+        self.contexts.add(
+            id,
+            Context {
+                notif: tx,
+                messages: Vec::new(),
+            },
+        );
         let res = self.send_request(msg).await;
         if let Err(e) = res {
             self.contexts.remove(id);
-            return Err(e)
+            return Err(e);
         };
-    
+
         let rec = rx.await;
         let recdata = match rec {
             Ok(m) => m,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, e))
+            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, e)),
         };
-
-
         Ok(recdata)
     }
 
+    pub async fn send_request_bind(&self, name: &str, password: &str) -> Result<MsgBindResponse> {
+        let msg = Message {
+            id: self
+                .last_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            params: MessageParams::Bind(MsgBind {
+                version: 3,
+                name: name.to_owned(),
+                password: password.to_owned(),
+            }),
+        };
+
+        let mut res = self.send_request_w(msg).await?;
+        if res.len() == 1 {
+            if let MessageParams::BindResponse(r) = res.remove(0).params {
+                return Ok(r);
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "empty result",
+        ))
+    }
 }
 
 pub async fn connect(remote_address: &str) -> Result<ClientConnection> {
@@ -111,10 +162,10 @@ pub async fn connect(remote_address: &str) -> Result<ClientConnection> {
             match data {
                 Some(d) => {
                     if (writer.write_all(d.as_ref()).await).is_err() {
-                        break
+                        break;
                     }
-                },
-                None => break
+                }
+                None => break,
             }
         }
     });
@@ -134,11 +185,14 @@ pub async fn connect(remote_address: &str) -> Result<ClientConnection> {
                     if s.send(m).is_err() {
                         break;
                     }
-                },
+                }
                 None => continue,
             }
         }
     });
-    Ok(ClientConnection { req_writer: transmit_tx, contexts })
+    Ok(ClientConnection {
+        req_writer: transmit_tx,
+        contexts,
+        last_id: AtomicU32::new(0),
+    })
 }
-

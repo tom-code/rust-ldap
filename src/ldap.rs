@@ -1,20 +1,17 @@
-
-
-
 #[derive(Debug, Clone)]
 pub struct FilterAttributeValueAssertion {
     pub name: String,
-    pub value: String
+    pub value: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct FilterPresent {
-    pub name: String
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct FilterAnd {
-    pub items: Vec<Filter>
+    pub items: Vec<Filter>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,29 +19,28 @@ pub enum Filter {
     Empty(),
     EqualityMatch(FilterAttributeValueAssertion),
     Present(FilterPresent),
-    And(FilterAnd)
+    And(FilterAnd),
 }
 
-
 #[derive(Debug, Clone)]
-pub struct MsgBind{
+pub struct MsgBind {
     pub version: u32,
     pub name: String,
-    pub password: String
+    pub password: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct MsgBindResponse {
     pub res: u32,
     pub matched_dn: String,
-    pub diag: String
+    pub diag: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SearchScope {
     BaseObject,
     SingleLevel,
-    WholeSubtree
+    WholeSubtree,
 }
 impl TryFrom<u32> for SearchScope {
     type Error = std::io::Error;
@@ -54,7 +50,10 @@ impl TryFrom<u32> for SearchScope {
             0 => Ok(SearchScope::BaseObject),
             1 => Ok(SearchScope::SingleLevel),
             2 => Ok(SearchScope::WholeSubtree),
-            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown search scope"))
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unknown search scope",
+            )),
         }
     }
 }
@@ -64,7 +63,7 @@ pub enum DerefAliases {
     NeverDerefAliases,
     DerefInSearching,
     DerefFindingBaseObj,
-    DerefAlways
+    DerefAlways,
 }
 impl TryFrom<u32> for DerefAliases {
     type Error = std::io::Error;
@@ -75,7 +74,10 @@ impl TryFrom<u32> for DerefAliases {
             1 => Ok(DerefAliases::DerefInSearching),
             2 => Ok(DerefAliases::DerefFindingBaseObj),
             3 => Ok(DerefAliases::DerefAlways),
-            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown deref alias"))
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unknown deref alias",
+            )),
         }
     }
 }
@@ -87,31 +89,28 @@ pub struct MsgSearch {
     pub deref: DerefAliases,
     pub filter: Filter,
     pub size_limit: u32,
-    pub time_limit: u32
+    pub time_limit: u32,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct PartialAttribute {
     pub name: String,
-    pub values: Vec<String>
+    pub values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MsgSearchResult {
     pub name: String,
-    pub values: Vec<PartialAttribute>
+    pub values: Vec<PartialAttribute>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MsgSearchResultDone {
-    pub res: u32
+    pub res: u32,
 }
-
 
 #[derive(Debug, Clone)]
-pub struct MsgUnbind {
-}
+pub struct MsgUnbind {}
 
 #[derive(Debug, Clone)]
 pub enum MessageParams {
@@ -126,5 +125,5 @@ pub enum MessageParams {
 #[derive(Debug, Clone)]
 pub struct Message {
     pub id: u32,
-    pub params: MessageParams
+    pub params: MessageParams,
 }
