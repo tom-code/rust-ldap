@@ -37,6 +37,9 @@ impl DecodeContext {
         Self{ buffer: [0; 1000], have: 0 }
     }
 }
-struct Client {
 
+impl Default for DecodeContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -40,11 +40,51 @@ pub struct MsgBindResponse {
     pub diag: String
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SearchScope {
+    BaseObject,
+    SingleLevel,
+    WholeSubtree
+}
+impl TryFrom<u32> for SearchScope {
+    type Error = std::io::Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(SearchScope::BaseObject),
+            1 => Ok(SearchScope::SingleLevel),
+            2 => Ok(SearchScope::WholeSubtree),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown search scope"))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DerefAliases {
+    NeverDerefAliases,
+    DerefInSearching,
+    DerefFindingBaseObj,
+    DerefAlways
+}
+impl TryFrom<u32> for DerefAliases {
+    type Error = std::io::Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(DerefAliases::NeverDerefAliases),
+            1 => Ok(DerefAliases::DerefInSearching),
+            2 => Ok(DerefAliases::DerefFindingBaseObj),
+            3 => Ok(DerefAliases::DerefAlways),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown deref alias"))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MsgSearch {
     pub base_object: String,
-    pub scope: u32,
-    pub deref: u32,
+    pub scope: SearchScope,
+    pub deref: DerefAliases,
     pub filter: Filter,
     pub size_limit: u32,
     pub time_limit: u32
@@ -74,7 +114,7 @@ pub struct MsgUnbind {
 }
 
 #[derive(Debug, Clone)]
-pub enum MsgE {
+pub enum MessageParams {
     Bind(MsgBind),
     BindResponse(MsgBindResponse),
     Search(MsgSearch),
@@ -86,5 +126,5 @@ pub enum MsgE {
 #[derive(Debug, Clone)]
 pub struct Message {
     pub id: u32,
-    pub params: MsgE
+    pub params: MessageParams
 }

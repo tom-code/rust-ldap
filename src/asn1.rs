@@ -42,7 +42,10 @@ pub fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String> {
     let size = read_size(cursor)?;
     let mut buf = vec![0;size];
     cursor.read_exact(&mut buf)?;
-    Ok(std::str::from_utf8(&buf).unwrap().to_owned())
+    match std::str::from_utf8(&buf) {
+        Ok(s) => Ok(s.to_owned()),
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+    }
 }
 
 pub fn write_tag(buf: &mut Vec<u8>, tag: u8) -> Result<()> {
@@ -154,13 +157,6 @@ impl Encoder {
         write_bool(&mut self.buffer, val)
     }
 
-    /*pub fn dump(&self) {
-        //println!("{:02X?}", self.buffer);
-        for c in &self.buffer {
-            print!("{:02X?}", c);
-        }
-        println!();
-    }*/
     pub fn encode(mut self) -> Vec<u8> {
         self.fix();
         self.buffer

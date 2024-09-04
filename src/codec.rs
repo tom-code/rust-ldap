@@ -3,18 +3,7 @@ use std::io::Read;
 use std::io::Result;
 
 use crate::asn1;
-use crate::ldap::Filter;
-use crate::ldap::FilterAnd;
-use crate::ldap::FilterAttributeValueAssertion;
-use crate::ldap::FilterPresent;
-use crate::ldap::Message;
-use crate::ldap::MsgBind;
-use crate::ldap::MsgBindResponse;
-use crate::ldap::MsgE;
-use crate::ldap::MsgSearch;
-use crate::ldap::MsgSearchResult;
-use crate::ldap::MsgSearchResultDone;
-use crate::ldap::MsgUnbind;
+use crate::ldap::*;
 
 
 
@@ -40,8 +29,10 @@ pub fn ldap_read_filter_attr_desc(cursor: &mut Cursor<&[u8]>) -> Result<FilterPr
     }
     let mut buf = vec![0;size];
     cursor.read_exact(&mut buf)?;
-    let name = std::str::from_utf8(&buf).unwrap().to_owned();
-    Ok(FilterPresent { name })
+    match std::str::from_utf8(&buf) {
+        Ok(name) => Ok(FilterPresent { name: name.to_owned() }),
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+    }
 }
 
 pub fn ldap_read_filter_and(cursor: &mut Cursor<&[u8]>) -> Result<FilterAnd> {
@@ -173,7 +164,6 @@ pub fn ldap_write_search_res_entry(id: u32, name: &str, attrs: &Vec<crate::ldap:
 
 
 pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
-    //println!("parsing {:?}", hex::encode(data));
     if data.len() < 4 {
         return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
     }
@@ -193,7 +183,7 @@ pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
             let password = asn1::read_string(&mut cursor).unwrap_or("".to_owned());
             Ok((Message {
                 id: message_id,
-                params: MsgE::Bind(MsgBind{
+                params: MessageParams::Bind(MsgBind{
                     version,
                     name,
                     password
@@ -207,7 +197,7 @@ pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
             let diag = asn1::read_string(&mut cursor)?;
             Ok((Message {
                 id: message_id,
-                params: MsgE::BindResponse(MsgBindResponse{ res, matched_dn, diag }),
+                params: MessageParams::BindResponse(MsgBindResponse{ res, matched_dn, diag }),
             }, start_seq_len + 2))
         }
         0x63 => { // search
@@ -221,10 +211,10 @@ pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
             let filter = ldap_read_filter(&mut cursor)?;
             Ok((Message {
                 id: message_id,
-                params: MsgE::Search(MsgSearch{
+                params: MessageParams::Search(MsgSearch{
                     base_object,
-                    scope,
-                    deref,
+                    scope: scope.try_into()?,
+                    deref: deref.try_into()?,
                     filter,
                     size_limit,
                     time_limit
@@ -256,20 +246,20 @@ pub fn parse_message(data: &[u8]) -> Result<(Message, usize)>{
             }
             Ok ((Message {
                 id: message_id,
-                params: MsgE::SearchResult(MsgSearchResult {name, values: partial_attr_list })}, start_seq_len + 2 ))
+                params: MessageParams::SearchResult(MsgSearchResult {name, values: partial_attr_list })}, start_seq_len + 2 ))
         },
         0x65 => { // search result done
             let _app_size = asn1::read_size(&mut cursor);
             let res = asn1::read_uint(&mut cursor)?;
             Ok ((Message {
                 id: message_id,
-                params: MsgE::MsgSearchResultDone(MsgSearchResultDone {res})}, start_seq_len + 2 ))
+                params: MessageParams::MsgSearchResultDone(MsgSearchResultDone {res})}, start_seq_len + 2 ))
         }
 
         0x42 => {
             Ok((Message {
                 id: message_id,
-                params: MsgE::Unbind(MsgUnbind{
+                params: MessageParams::Unbind(MsgUnbind{
                 }),
             }, start_seq_len + 2))
         }
@@ -289,10 +279,10 @@ fn search_test() {
     assert_eq!(d1.1, 43);
     let m = d1.0;
     assert_eq!(m.id, 2);
-    if let MsgE::Search(s) = m.params {
+    if let MessageParams::Search(s) = m.params {
         assert_eq!(s.base_object, "");
-        assert_eq!(s.scope, 2);
-        assert_eq!(s.deref, 0);
+        assert_eq!(s.scope, crate::ldap::SearchScope::WholeSubtree);
+        assert_eq!(s.deref, crate::ldap::DerefAliases::NeverDerefAliases);
         assert_eq!(s.size_limit, 0);
         assert_eq!(s.time_limit, 0);
         if let Filter::And(fa) = s.filter {
@@ -324,12 +314,14 @@ fn bind_test() {
     assert_eq!(d1.1, 21);
     let m = d1.0;
     assert_eq!(m.id, 1);
-    if let MsgE::Bind(s) = m.params {
+    if let MessageParams::Bind(s) = m.params {
         assert_eq!(s.name, "xx");
         assert_eq!(s.password, "heslo");
         assert_eq!(s.version, 3);
     } else {
         unreachable!();
     }
-    //let m.params
+
+    let encoded = ldap_write_bind_request(1, "xx", "heslo").unwrap();
+    assert_eq!(encoded, hex::decode("3013020101600e0201030402787880056865736c6f".as_bytes()).unwrap());
 }
