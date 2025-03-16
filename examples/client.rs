@@ -78,6 +78,8 @@ async fn client_example2(remote_addres: &str, speed: f64, duration: Duration) ->
                 log::info!("response2: {:?}", res2);
             });
         }
+        println!("did send {}", n);
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
     Ok(())

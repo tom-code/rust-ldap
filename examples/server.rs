@@ -38,7 +38,7 @@ impl lds::server::Service for Test1 {
                         ],
                     )?;
 
-                    let mut resp2 = codec::ldap_write_search_res_done(id, 1)?;
+                    let mut resp2 = codec::ldap_write_search_res_done(id, 0)?;
                     resp1.append(&mut resp2);
                     Ok(resp1)
                 }
