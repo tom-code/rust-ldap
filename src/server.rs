@@ -1,4 +1,5 @@
 use crate::{ldap, tokiou};
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::{future::Future, io::Result, pin::Pin, sync::Arc};
 use tokio::net::TcpListener;
 
@@ -24,6 +25,7 @@ impl LdapServer {
         s: Arc<impl Service + std::marker::Send + std::marker::Sync + 'static>,
     ) -> Result<()> {
         let mut dec = tokiou::DecodeContext::new();
+        let mut pending_responses = FuturesUnordered::new();
 
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1024);
         tokio::spawn(async move {
@@ -36,18 +38,29 @@ impl LdapServer {
                 }
             }
         });
+
         loop {
-            let parsed = dec.get_message(socket).await?;
-            let f = s.call(parsed);
-            let wtx = writer_tx.clone();
-            tokio::spawn(async move {
-                let resp = f.await;
-                if let Ok(resp) = resp {
-                    if !resp.is_empty() {
-                        wtx.send(resp).await.unwrap();
+            tokio::select! {
+                parsed_result = dec.get_message(socket) => {
+                    let parsed = parsed_result?;
+                    let f = s.call(parsed);
+                    pending_responses.push(f);
+                }
+                Some(resp_result) = pending_responses.next(), if !pending_responses.is_empty() => {
+                    match resp_result {
+                        Ok(resp) => {
+                            if !resp.is_empty()
+                                && writer_tx.send(resp).await.is_err() {
+                                    log::info!("writer channel closed, stopping writer task");
+                                    return Ok(());
+                                }
+                        }
+                        Err(e) => {
+                            log::error!("service error: {:?}", e);
+                        }
                     }
                 }
-            });
+            }
         }
     }
 

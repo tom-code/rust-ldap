@@ -20,6 +20,12 @@ impl DecodeContext {
                 Ok(r) => r,
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
+                        if self.have >= MAX_SIZE {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "message too large for buffer",
+                            ));
+                        }
                         let res =
                             tokio::io::AsyncReadExt::read(s, &mut self.buffer[self.have..]).await?;
                         if res == 0 {

@@ -1,7 +1,7 @@
 use crate::ldap::{self, Message, MessageParams, MsgBind, MsgBindResponse};
 use crate::tokiou;
 use std::sync::atomic::AtomicU32;
-use std::{collections::HashMap, io::Result};
+use std::{collections::HashMap, io::Result, time::Duration};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::oneshot};
 
 struct Context {
@@ -55,12 +55,17 @@ impl Contexts {
             None => None,
         }
     }
+    fn drain_all(&self) {
+        let mut l = self.contexts.lock().unwrap();
+        l.clear();
+    }
 }
 
 pub struct ClientConnection {
     req_writer: tokio::sync::mpsc::Sender<Vec<u8>>,
     contexts: std::sync::Arc<Contexts>,
     last_id: AtomicU32,
+    timeout: Duration,
 }
 impl ClientConnection {
     async fn send_raw(&self, data: Vec<u8>) -> Result<()> {
@@ -91,10 +96,17 @@ impl ClientConnection {
             return Err(e);
         };
 
-        let rec = rx.await;
+        let rec = tokio::time::timeout(self.timeout, rx).await;
         let recdata = match rec {
-            Ok(m) => m,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, e)),
+            Ok(Ok(m)) => m,
+            Ok(Err(e)) => return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, e)),
+            Err(_) => {
+                self.contexts.remove(id);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("timed out waiting for response to message id {}", id),
+                ));
+            }
         };
         Ok(recdata)
     }
@@ -124,12 +136,12 @@ impl ClientConnection {
         }
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "empty result",
+            "unexpected bind response",
         ))
     }
 }
 
-pub async fn connect(remote_address: &str) -> Result<ClientConnection> {
+async fn connect_internal(remote_address: &str, timeout: Duration) -> Result<ClientConnection> {
     let (transmit_tx, mut transmit_rx) = tokio::sync::mpsc::channel(1024);
     let stream = TcpStream::connect(remote_address).await?;
     let (mut reader, mut writer) = stream.into_split();
@@ -167,10 +179,20 @@ pub async fn connect(remote_address: &str) -> Result<ClientConnection> {
                 None => continue,
             }
         }
+        contexts_clone.drain_all();
     });
     Ok(ClientConnection {
         req_writer: transmit_tx,
         contexts,
-        last_id: AtomicU32::new(0),
+        last_id: AtomicU32::new(1),
+        timeout,
     })
+}
+
+pub async fn connect(remote_address: &str) -> Result<ClientConnection> {
+    connect_internal(remote_address, Duration::from_secs(30)).await
+}
+
+pub async fn connect_with_timeout(remote_address: &str, timeout: Duration) -> Result<ClientConnection> {
+    connect_internal(remote_address, timeout).await
 }
